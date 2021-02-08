@@ -30,6 +30,7 @@ struct Home : View {
     @State var alert = false
     @State var source : CLLocationCoordinate2D!
     @State var destination : CLLocationCoordinate2D!
+    @State var name = ""
     
     var body: some View {
         
@@ -39,17 +40,26 @@ struct Home : View {
                 
                 HStack {
                     
-                    Text("Pick a Location")
-                        .font(.title)
-                        .foregroundColor(.black)
+                    VStack(alignment: .leading, spacing: 15, content: {
+                        
+                        Text("Pick a Location")
+                            .font(.title)
+                            
+                        if self.destination != nil {
+                            
+                            Text(self.name)
+                                .fontWeight(.bold)
+                        }
+                    })
                     
                     Spacer()
                 }
+                .foregroundColor(.black)
                 .padding()
                 .padding(.top, UIApplication.shared.windows.first?.safeAreaInsets.top)
                 .background(Color.white)
                 
-                MapView(map: self.$map, manager: self.$manager, alert: self.$alert, source: self.$source, destination: self.$destination)
+                MapView(map: self.$map, manager: self.$manager, alert: self.$alert, source: self.$source, destination: self.$destination,name: self.$name)
                     .onAppear() {
                         
                         self.manager.requestAlwaysAuthorization()
@@ -57,6 +67,10 @@ struct Home : View {
             }
         }
         .edgesIgnoringSafeArea(.all)
+        .alert(isPresented: self.$alert, content: {
+            
+            Alert(title: Text("Error"), message: Text("Please Enable location In Setting!!!"), dismissButton: .destructive(Text("OK")))
+        })
     }
 }
 
@@ -73,12 +87,15 @@ struct MapView : UIViewRepresentable {
     @Binding var alert : Bool
     @Binding var source : CLLocationCoordinate2D!
     @Binding var destination : CLLocationCoordinate2D!
+    @Binding var name : String
     
     func makeUIView(context: Context) -> MKMapView {
          
         map.delegate = context.coordinator
         manager.delegate = context.coordinator
         map.showsUserLocation = true
+        let gesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.tap(ges:)))
+        map.addGestureRecognizer(gesture)
         return map
     }
     
@@ -109,7 +126,70 @@ struct MapView : UIViewRepresentable {
         
         func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
             
+            let region = MKCoordinateRegion(center: locations.last!.coordinate, latitudinalMeters: 10000, longitudinalMeters: 10000)
+            
             self.parent.source = locations.last!.coordinate
+            
+            self.parent.map.region = region
+        }
+        
+        @objc func tap(ges: UITapGestureRecognizer) {
+            
+            let location = ges.location(in: self.parent.map)
+            let mplocation = self.parent.map.convert(location, toCoordinateFrom: self.parent.map)
+            
+            let point = MKPointAnnotation()
+//            point.title = "Marked"
+            point.subtitle = "Destination"
+            point.coordinate = mplocation
+            
+            self.parent.destination = mplocation
+            
+            let decoder = CLGeocoder()
+            decoder.reverseGeocodeLocation(CLLocation(latitude: mplocation.latitude, longitude: mplocation.longitude)) { (places, err) in
+                
+                if err != nil {
+                    
+                    print((err?.localizedDescription)!)
+                    return
+                }
+                
+                self.parent.name = places?.first?.name ?? ""
+                point.title = places?.first?.name ?? ""
+            }
+            
+            let req = MKDirections.Request()
+            req.source = MKMapItem(placemark: MKPlacemark(coordinate: self.parent.source))
+            req.destination = MKMapItem(placemark: MKPlacemark(coordinate: mplocation))
+            
+            let directions = MKDirections(request: req)
+            
+            directions.calculate { (dir, err) in
+                
+                if err != nil {
+                    
+                    print((err?.localizedDescription)!)
+                    return
+                }
+                
+                let polyline = dir?.routes[0].polyline
+                
+                self.parent.map.removeOverlays(self.parent.map.overlays)
+                
+                self.parent.map.addOverlay(polyline!)
+                self.parent.map.setRegion(MKCoordinateRegion(polyline!.boundingMapRect), animated: true)
+            }
+            
+            self.parent.map.removeAnnotations(self.parent.map.annotations)
+            self.parent.map.addAnnotation(point)
+        }
+        
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            
+            let over = MKPolylineRenderer(overlay: overlay)
+            over.strokeColor = .red
+            over.lineWidth = 3
+            return over
         }
     }
 }
